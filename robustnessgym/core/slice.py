@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from copy import copy
 from json import JSONDecodeError
 
 from robustnessgym.core.constants import CURATION
@@ -31,6 +32,7 @@ class Slice(Dataset):
             # Update with the dataset info
             dataset = args[0]
             self.__dict__.update(dataset.__dict__)
+            self._dataset = copy(dataset._dataset)
             self._identifier = identifier or dataset.identifier
             self.lineage = [(str(Dataset.__name__), dataset.identifier)]
         else:
@@ -38,7 +40,7 @@ class Slice(Dataset):
 
     def __repr__(self):
         return (
-            f"RobustnessGym{self.__class__.__name__}["
+            f"RG{self.__class__.__name__}["
             f"num_rows: {self.num_rows}]({self.identifier})"
         )
 

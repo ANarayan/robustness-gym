@@ -4,10 +4,11 @@ import gzip
 import os
 import pickle
 from types import SimpleNamespace
-from typing import Callable, Dict, List, Mapping, Optional, Union
+from typing import Callable, Dict, List, Mapping, Optional, Sequence, Union
 
 import cytoolz as tz
 import datasets
+import numpy as np
 import pyarrow as pa
 from datasets import DatasetInfo, Features, NamedSplit
 
@@ -72,6 +73,9 @@ class InMemoryDataset(AbstractDataset):
         self.all_columns = list(self._data.keys())
         self.visible_columns = None
 
+        # Create attributes for visible rows
+        self.visible_rows = None
+
         # Initialization
         self._initialize_state()
 
@@ -79,6 +83,9 @@ class InMemoryDataset(AbstractDataset):
         """Dataset state initialization."""
         # Show all columns by default
         self.visible_columns = self.all_columns
+
+        # Show all rows by default
+        self.visible_rows = None
 
         # Set the features
         self._set_features()
@@ -187,10 +194,13 @@ class InMemoryDataset(AbstractDataset):
         # Convert to batch
         batch = self._example_or_batch_to_batch(example_or_batch)
 
-        # Dataset is empty: just assign it to the batch
-        self._data = batch
         # TODO(karan): what other data properties need to be in sync here
-        self.all_columns = self.visible_columns = list(self._data.keys())
+        self.all_columns = self.visible_columns = list(batch.keys())
+
+        # Dataset is empty: create the columns and append the batch
+        self._data = {k: [] for k in self.column_names}
+        for k in self.column_names:
+            self._data[k].extend(batch[k])
 
     def append(
         self,
@@ -219,25 +229,66 @@ class InMemoryDataset(AbstractDataset):
             self._data[k].extend(batch[k])
 
     def __len__(self):
-        # Pick any column
-        column_names = self.column_names
-        if column_names:
-            return len(self._data[column_names[0]])
+        # If only a subset of rows are visible
+        if self.visible_rows is not None:
+            return len(self.visible_rows)
+
+        # If there are columns, len of any column
+        if self.column_names:
+            return len(self._data[self.column_names[0]])
         return 0
 
-    def __getitem__(self, index):
-        if isinstance(index, int) or isinstance(index, slice):
-            return {k: self._data[k][index] for k in self.visible_columns}
-        elif isinstance(index, tuple):
-            raise NotImplementedError("Tuple as index")
+    def _remap_index(self, index):
+        if isinstance(index, int):
+            return self.visible_rows[index].item()
+        elif isinstance(index, slice):
+            return self.visible_rows[index].tolist()
         elif isinstance(index, str):
+            return index
+        elif (isinstance(index, tuple) or isinstance(index, list)) and len(index):
+            return self.visible_rows[index].tolist()
+        else:
+            raise TypeError("Invalid argument type: {}".format(type(index)))
+
+    def __getitem__(self, index):
+        if self.visible_rows is not None:
+            # Remap the index if only some rows are visible
+            index = self._remap_index(index)
+
+        if (
+            isinstance(index, int)
+            or isinstance(index, slice)
+            or isinstance(index, np.int)
+        ):
+            # int or slice index => standard list slicing
+            return {k: self._data[k][index] for k in self.visible_columns}
+        elif isinstance(index, str):
+            # str index => column selection
             if index in self.column_names:
+                if self.visible_rows is not None:
+                    return [self._data[index][i] for i in self.visible_rows]
                 return self._data[index]
             raise AttributeError(f"Column {index} does not exist.")
-        elif isinstance(index, list) and len(index):
+        elif (isinstance(index, tuple) or isinstance(index, list)) and len(index):
             return {k: [self._data[k][i] for i in index] for k in self.visible_columns}
         else:
             raise TypeError("Invalid argument type: {}".format(type(index)))
+
+    def set_visible_rows(self, indices: Optional[Sequence]):
+        """Set the visible rows in the dataset."""
+        if indices is None:
+            self.visible_rows = None
+        else:
+            if len(indices):
+                assert min(indices) >= 0 and max(indices) < len(self), (
+                    f"Ensure min index {min(indices)} >= 0 and "
+                    f"max index {max(indices)} < {len(self)}."
+                )
+            self.visible_rows = np.array(indices, dtype=int)
+
+    def reset_visible_rows(self):
+        """Reset to make all rows visible."""
+        self.visible_rows = None
 
     @classmethod
     def from_batch(cls, batch: Batch):
@@ -334,9 +385,9 @@ class InMemoryDataset(AbstractDataset):
         **kwargs,
     ) -> Optional[InMemoryDataset]:
 
-        # Set the function if it's None
+        # Just return if the function is None
         if function is None:
-            function = (lambda x, index: x) if with_indices else lambda x: x
+            return None
 
         if isinstance(input_columns, str):
             input_columns = [input_columns]

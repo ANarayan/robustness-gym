@@ -89,7 +89,8 @@ class Dataset(
         self._create_logdir()
 
         # Add an index to the dataset
-        self._dataset = self._dataset.map(self.add_index, with_indices=True)
+        if not self.has_index:
+            self._dataset = self._dataset.map(self.add_index, with_indices=True)
 
     @property
     def identifier(self):
@@ -123,11 +124,22 @@ class Dataset(
 
     def set_format(self, columns: List[str]):
         """Set the dataset format."""
+        # TODO(karan): change `cache`
+        if "cache" in self.column_names:
+            return self._dataset.set_format(columns=columns + ["cache"])
         return self._dataset.set_format(columns=columns)
 
     def reset_format(self):
         """Set the dataset format."""
         return self._dataset.reset_format()
+
+    def set_visible_rows(self, indices: Sequence):
+        """Set the visible rows in the dataset."""
+        self._dataset.set_visible_rows(indices)
+
+    def reset_visible_rows(self):
+        """Reset to make all rows visible."""
+        self._dataset.reset_visible_rows()
 
     @staticmethod
     def add_index(example, index):
@@ -178,14 +190,19 @@ class Dataset(
 
     def __repr__(self):
         return (
-            f"RobustnessGym{self.__class__.__name__}"
-            f"(num_rows: {self._dataset.num_rows})"
+            f"RG{self.__class__.__name__}["
+            f"num_rows: {self.num_rows}]({self.identifier})"
         )
 
     @property
     def column_names(self):
         """Name of the columns in the dataset."""
         return self._dataset.column_names
+
+    @property
+    def has_index(self):
+        """Check if the dataset has an index column."""
+        return "index" in self._dataset.column_names
 
     @classmethod
     def uncached_batch(cls, batch: Batch, copy=True) -> Batch:
@@ -402,6 +419,8 @@ class Dataset(
         elif isinstance(output, InMemoryDataset):
             dataset = deepcopy(self)
             dataset._dataset = output
+        elif output is None:
+            dataset = self
         else:
             raise NotImplementedError("Unrecognized dataset generated after .map().")
 
