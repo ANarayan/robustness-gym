@@ -230,9 +230,12 @@ class Dataset(
         return self._dataset.column_names
 
     @property
-    def has_index(self):
+    def has_index(self) -> bool:
         """Check if the dataset has an index column."""
-        return "index" in self._dataset.column_names
+        if self._dataset.column_names:
+            return "index" in self._dataset.column_names
+        # Just return True if the dataset is empty
+        return True
 
     @classmethod
     def uncached_batch(cls, batch: Batch, copy=True) -> Batch:

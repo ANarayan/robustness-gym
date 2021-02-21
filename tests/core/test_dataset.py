@@ -164,7 +164,9 @@ class TestDataset(TestCase):
 
     def test_load_dataset(self):
         # Load the first 20 examples of the boolq dataset
-        dataset = Dataset.load_dataset("boolq", split="train[:20]")
+        dataset = Dataset.load_dataset(
+            "boolq", split="train[:20]", dataset_fmt="in_memory"
+        )
 
         # Check that we got 20 examples
         self.assertTrue(isinstance(dataset, Dataset))
