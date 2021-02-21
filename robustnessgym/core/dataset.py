@@ -3,11 +3,13 @@ from __future__ import annotations
 import json
 import os
 import pathlib
+from contextlib import contextmanager
 from copy import deepcopy
 from typing import Callable, Dict, List, Optional, Sequence, Union
 
 import cytoolz as tz
 import datasets
+import pandas as pd
 from datasets import Features
 from pyarrow import json as jsonarrow
 from pyarrow import table
@@ -90,7 +92,8 @@ class Dataset(
 
         # Add an index to the dataset
         if not self.has_index:
-            self._dataset = self._dataset.map(self.add_index, with_indices=True)
+            # self._dataset = self._dataset.map(self.add_index, with_indices=True)
+            self._add_index()
 
     @property
     def identifier(self):
@@ -122,6 +125,20 @@ class Dataset(
         """Number of rows in the dataset."""
         return self._dataset.num_rows
 
+    @contextmanager
+    def format(self, columns: List[str] = None):
+        """Context where only a subset of columns will be visible."""
+        if columns:
+            # Use a subset of columns
+            self.set_format(columns)
+        else:
+            # Use all columns
+            self.set_format(self.column_names)
+        try:
+            yield
+        finally:
+            self.reset_format()
+
     def set_format(self, columns: List[str]):
         """Set the dataset format."""
         # TODO(karan): change `cache`
@@ -140,6 +157,19 @@ class Dataset(
     def reset_visible_rows(self):
         """Reset to make all rows visible."""
         self._dataset.reset_visible_rows()
+
+    def add_column(self, column: str, values: List):
+        """Add a column to the dataset."""
+        self._dataset.add_column(column, values)
+
+    def _add_index(self):
+        """Add an index to the dataset."""
+        self.add_column("index", [str(i) for i in range(len(self))])
+
+    def head(self, n: int, columns: List[str] = None):
+        """View the first `n` examples of the dataset."""
+        with self.format(columns):
+            return pd.DataFrame(self[:n])
 
     @staticmethod
     def add_index(example, index):
@@ -351,6 +381,40 @@ class Dataset(
         return cls.from_batch(
             batch=d,
             identifier=identifier,
+            dataset_fmt=dataset_fmt,
+        )
+
+    @classmethod
+    def from_pandas(
+        cls,
+        df: pd.DataFrame,
+        identifier: Identifier = None,
+        dataset_fmt: str = "in_memory",
+    ):
+        """
+        Create a Dataset from a pandas DataFrame.
+        """
+        return cls.from_batch(
+            df.to_dict("list"),
+            identifier=identifier,
+            dataset_fmt=dataset_fmt,
+        )
+
+    @classmethod
+    def from_feather(
+        cls,
+        path: str,
+        identifier: Identifier = None,
+        dataset_fmt: str = "in_memory",
+    ):
+        """
+        Create a Dataset from a feather file.
+        """
+        return cls.from_batch(
+            pd.read_feather(path).to_dict("list"),
+            identifier=Identifier("Feather", path=path)
+            if not identifier
+            else identifier,
             dataset_fmt=dataset_fmt,
         )
 

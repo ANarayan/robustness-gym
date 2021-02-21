@@ -203,6 +203,13 @@ class CachedOperation(Operation):
                 for cols_ in columns
             }
 
+    @classmethod
+    def available(cls, batch: Batch):
+        # Check if the cached operation is available to retrieve in the batch
+        if "cache" not in batch:
+            return False
+        return any([key.startswith(cls.__name__) for key in batch["cache"][0].keys()])
+
     def get_cache_hash(self, columns: Optional[List[str]] = None):
         """Construct a hash that will be used to identify the application of a
         cached operation to the columns of a dataset."""
@@ -217,7 +224,13 @@ class CachedOperation(Operation):
         """Construct a file name for caching."""
         return "cache-" + str(abs(self.get_cache_hash(columns=columns))) + ".arrow"
 
-    def prepare_batch(self, batch: Batch, columns: List[str]) -> Batch:
+    def prepare_batch(
+        self,
+        batch: Batch,
+        columns: List[str],
+        *args,
+        **kwargs,
+    ) -> Batch:
         """Preparation that is applied before the CachedOperation.
 
         This is provided as a convenience function that can be called by
@@ -232,8 +245,13 @@ class CachedOperation(Operation):
         return batch
 
     def prepare_dataset(
-        self, dataset: Dataset, columns: List[str], batch_size: int = 32
-    ) -> Dataset:
+        self,
+        dataset: Dataset,
+        columns: List[str],
+        batch_size: int = 32,
+        *args,
+        **kwargs,
+    ) -> None:
         """Preparation that is applied before the CachedOperation.
 
         Many CachedOperations require a full pass over the dataset to precompute some
@@ -249,70 +267,91 @@ class CachedOperation(Operation):
         Returns: updated Dataset
         """
 
-        # Apply preparation to the dataset
-        # TODO(karan): this is similar to the try except block for slicebuilders,
-        #  refactor
-        try:
-            return dataset.map(
-                partial(self.prepare_batch, columns=columns),
-                batched=True,
-                batch_size=batch_size,
-                # The cache file name is a XOR of the interaction history and the
-                # current operation
-                # FIXME(karan): this is repeated
-                cache_file_name=str(
-                    dataset.logdir
-                    / (
-                        "cache-"
-                        + str(
-                            abs(
-                                persistent_hash(str(dataset.identifier))
-                                ^ dataset.hash_interactions()
-                                ^ persistent_hash(
-                                    str(self.identifier) + str(strings_as_json(columns))
-                                )
-                            )
-                        )
-                        + "-prep.arrow"
-                    )
-                ),
-            )
-        except:  # TypeError or PicklingError or AttributeError: # noqa
-            # Batch the dataset, and process each batch
-            all_batches = [
+        # Set the data format
+        dataset.set_format(columns)
+
+        # Batch the dataset, and prepare each batch
+        for batch in dataset.batch(batch_size):
+            try:
+                # Check if the `prepare_batch` function has been implemented
                 self.prepare_batch(
                     batch=batch,
                     columns=columns,
+                    *args,
+                    **kwargs,
                 )
-                for batch in dataset.batch(batch_size)
-            ]
+            except NotImplementedError:
+                break
 
-            return dataset.map(
-                lambda examples, indices: all_batches[indices[0] // batch_size],
-                batched=True,
-                batch_size=batch_size,
-                with_indices=True,
-                load_from_cache_file=False,
-                # The cache file name is a XOR of the interaction history and the
-                # current operation
-                # FIXME(karan): this is repeated
-                cache_file_name=str(
-                    dataset.logdir
-                    / (
-                        "cache-"
-                        + str(
-                            abs(
-                                persistent_hash(str(dataset.identifier))
-                                ^ dataset.hash_interactions()
-                                ^ persistent_hash(
-                                    str(self.identifier) + str(strings_as_json(columns))
-                                )
-                            )
-                        )
-                        + "-prep.arrow"
-                    )
-                ),
-            )
+        # Reset the data format
+        dataset.reset_format()
+
+        # # Apply preparation to the dataset
+        # # TODO(karan): this is similar to the try except block for slicebuilders,
+        # #  refactor
+        # try:
+        #     return dataset.map(
+        #         partial(self.prepare_batch, columns=columns),
+        #         batched=True,
+        #         batch_size=batch_size,
+        #         # The cache file name is a XOR of the interaction history and the
+        #         # current operation
+        #         # FIXME(karan): this is repeated
+        #         cache_file_name=str(
+        #             dataset.logdir
+        #             / (
+        #                 "cache-"
+        #                 + str(
+        #                     abs(
+        #                         persistent_hash(str(dataset.identifier))
+        #                         ^ dataset.hash_interactions()
+        #                         ^ persistent_hash(
+        #                             str(self.identifier) +
+        #                             str(strings_as_json(columns))
+        #                         )
+        #                     )
+        #                 )
+        #                 + "-prep.arrow"
+        #             )
+        #         ),
+        #     )
+        # except:  # TypeError or PicklingError or AttributeError: # noqa
+        #     # Batch the dataset, and process each batch
+        #     all_batches = [
+        #         self.prepare_batch(
+        #             batch=batch,
+        #             columns=columns,
+        #         )
+        #         for batch in dataset.batch(batch_size)
+        #     ]
+        #
+        #     return dataset.map(
+        #         lambda examples, indices: all_batches[indices[0] // batch_size],
+        #         batched=True,
+        #         batch_size=batch_size,
+        #         with_indices=True,
+        #         load_from_cache_file=False,
+        #         # The cache file name is a XOR of the interaction history and the
+        #         # current operation
+        #         # FIXME(karan): this is repeated
+        #         cache_file_name=str(
+        #             dataset.logdir
+        #             / (
+        #                 "cache-"
+        #                 + str(
+        #                     abs(
+        #                         persistent_hash(str(dataset.identifier))
+        #                         ^ dataset.hash_interactions()
+        #                         ^ persistent_hash(
+        #                             str(self.identifier) +
+        #                             str(strings_as_json(columns))
+        #                         )
+        #                     )
+        #                 )
+        #                 + "-prep.arrow"
+        #             )
+        #         ),
+        #     )
 
     def apply(self, batch: Batch, columns: List[str], *args, **kwargs) -> List:
         """Implements the core functionality of the cached operation."""
@@ -331,7 +370,7 @@ class CachedOperation(Operation):
         ]
 
         # Construct updates
-        updates = self.construct_updates(
+        updates = self._construct_updates(
             encoded_outputs=encoded_outputs, columns=columns
         )
 
@@ -346,86 +385,80 @@ class CachedOperation(Operation):
     ) -> Dataset:
         """Apply the cached operation to a dataset."""
 
-        # Prepare to apply the CachedOperation to the dataset
-        dataset = self.prepare_dataset(
-            dataset=dataset,
-            columns=columns,
+        return dataset.map(
+            partial(self.process_batch, columns=columns),
+            batched=True,
             batch_size=batch_size,
         )
 
-        try:
-            return dataset.map(
-                partial(self.process_batch, columns=columns),
-                batched=True,
-                batch_size=batch_size,
-                # The cache file name is a XOR of the interaction history and the
-                # current operation
-                cache_file_name=str(
-                    dataset.logdir
-                    / (
-                        "cache-"
-                        + str(
-                            abs(
-                                persistent_hash(str(dataset.identifier))
-                                ^ dataset.hash_interactions()
-                                ^ persistent_hash(
-                                    str(self.identifier) + str(strings_as_json(columns))
-                                )
-                            )
-                        )
-                        + ".arrow"
-                    )
-                ),
-                # self.get_cache_file_name(columns=columns),
-            )
-        except:  # noqa
-            # Batch the dataset, and process each batch
-            all_batches = [
-                self.process_batch(
-                    batch=batch,
-                    columns=columns,
-                )
-                for batch in dataset.batch(batch_size)
-            ]
+        # try:
+        #     return dataset.map(
+        #         partial(self.process_batch, columns=columns),
+        #         batched=True,
+        #         batch_size=batch_size,
+        #         # The cache file name is a XOR of the interaction history and the
+        #         # current operation
+        #         cache_file_name=str(
+        #             dataset.logdir
+        #             / (
+        #                 "cache-"
+        #                 + str(
+        #                     abs(
+        #                         persistent_hash(str(dataset.identifier))
+        #                         ^ dataset.hash_interactions()
+        #                         ^ persistent_hash(
+        #                             str(self.identifier) +
+        #                             str(strings_as_json(columns))
+        #                         )
+        #                     )
+        #                 )
+        #                 + ".arrow"
+        #             )
+        #         ),
+        #         # self.get_cache_file_name(columns=columns),
+        #     )
+        # except:  # noqa
+        #     # Batch the dataset, and process each batch
+        #     all_batches = [
+        #         self.process_batch(
+        #             batch=batch,
+        #             columns=columns,
+        #         )
+        #         for batch in dataset.batch(batch_size)
+        #     ]
+        #
+        #     return dataset.map(
+        #         lambda examples, indices: all_batches[indices[0] // batch_size],
+        #         batched=True,
+        #         batch_size=batch_size,
+        #         with_indices=True,
+        #         load_from_cache_file=False,
+        #         # The cache file name is a XOR of the interaction history and the
+        #         # current operation
+        #         cache_file_name=str(
+        #             dataset.logdir
+        #             / (
+        #                 "cache-"
+        #                 + str(
+        #                     abs(
+        #                         persistent_hash(str(dataset.identifier))
+        #                         ^ dataset.hash_interactions()
+        #                         ^ persistent_hash(
+        #                             str(self.identifier) +
+        #                             str(strings_as_json(columns))
+        #                         )
+        #                     )
+        #                 )
+        #                 + ".arrow"
+        #             )
+        #         ),
+        #     )
 
-            return dataset.map(
-                lambda examples, indices: all_batches[indices[0] // batch_size],
-                batched=True,
-                batch_size=batch_size,
-                with_indices=True,
-                load_from_cache_file=False,
-                # The cache file name is a XOR of the interaction history and the
-                # current operation
-                cache_file_name=str(
-                    dataset.logdir
-                    / (
-                        "cache-"
-                        + str(
-                            abs(
-                                persistent_hash(str(dataset.identifier))
-                                ^ dataset.hash_interactions()
-                                ^ persistent_hash(
-                                    str(self.identifier) + str(strings_as_json(columns))
-                                )
-                            )
-                        )
-                        + ".arrow"
-                    )
-                ),
-            )
-
-    def construct_updates(self, encoded_outputs: List[str], columns: List[str]):
+    def _construct_updates(self, encoded_outputs: List[str], columns: List[str]):
         return [
             {str(self.identifier): {strings_as_json(columns): val}}
             for val in encoded_outputs
         ]
-
-    @classmethod
-    def available(cls, batch: Batch):
-        # Check if the cached operation is available to retrieve in the batch
-        if "cache" not in batch:
-            return False
-        return any([key.startswith(cls.__name__) for key in batch["cache"][0].keys()])
 
     def __call__(
         self, batch_or_dataset: BatchOrDataset, columns: List[str], batch_size: int = 32
@@ -440,6 +473,13 @@ class CachedOperation(Operation):
                 columns=columns,
             ):
                 return batch_or_dataset
+
+            # Prepare to apply the CachedOperation to the dataset
+            self.prepare_dataset(
+                dataset=batch_or_dataset,
+                columns=columns,
+                batch_size=batch_size,
+            )
 
             # Apply the CachedOperation to the dataset
             dataset = self.process_dataset(

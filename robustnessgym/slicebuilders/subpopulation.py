@@ -109,24 +109,31 @@ class Subpopulation(SliceBuilder):
             # Set the Slice category using the SliceBuilder's category
             sl.category = self.category
 
-            # Create the lineage
-            sl.lineage = [
-                (str(Dataset.__name__), dataset.identifier),
-                (
-                    str(self.category.capitalize()),
-                    self.identifiers[i],
-                    strings_as_json(columns),
-                ),
-            ]
-            if isinstance(dataset, Slice):
-                # Prepend the Slice's lineage instead, if the dataset was a slice
-                sl.lineage = dataset.lineage + [
-                    (
-                        str(self.category.capitalize()),
-                        self.identifiers[i],
-                        strings_as_json(columns),
-                    )
-                ]
+            # Append the the lineage
+            sl.add_to_lineage(
+                category=str(self.category.capitalize()),
+                identifier=self.identifiers[i],
+                columns=strings_as_json(columns),
+            )
+
+            # # Create the lineage
+            # sl.lineage = [
+            #     (str(Dataset.__name__), dataset.identifier),
+            #     (
+            #         str(self.category.capitalize()),
+            #         self.identifiers[i],
+            #         strings_as_json(columns),
+            #     ),
+            # ]
+            # if isinstance(dataset, Slice):
+            #     # Prepend the Slice's lineage instead, if the dataset was a slice
+            #     sl.lineage = dataset.lineage + [
+            #         (
+            #             str(self.category.capitalize()),
+            #             self.identifiers[i],
+            #             strings_as_json(columns),
+            #         )
+            #     ]
 
         return slices, slice_membership
 
