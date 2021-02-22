@@ -148,6 +148,8 @@ class InMemoryDataset(AbstractDataset):
             return index
         elif (isinstance(index, tuple) or isinstance(index, list)) and len(index):
             return self.visible_rows[index].tolist()
+        elif isinstance(index, np.ndarray) and len(index.shape) == 1:
+            return self.visible_rows[index].tolist()
         else:
             raise TypeError("Invalid argument type: {}".format(type(index)))
 
@@ -172,6 +174,10 @@ class InMemoryDataset(AbstractDataset):
             raise AttributeError(f"Column {index} does not exist.")
         elif (isinstance(index, tuple) or isinstance(index, list)) and len(index):
             return {k: [self._data[k][i] for i in index] for k in self.visible_columns}
+        elif isinstance(index, np.ndarray) and len(index.shape) == 1:
+            return {
+                k: [self._data[k][int(i)] for i in index] for k in self.visible_columns
+            }
         else:
             raise TypeError("Invalid argument type: {}".format(type(index)))
 
